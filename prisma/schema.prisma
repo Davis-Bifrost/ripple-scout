@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model UploadBatch {
+  id             String   @id @default(cuid())
+  filename       String
+  operator       String?
+  fileSize       Int
+  fileHash       String
+  uploadedAt     DateTime @default(now())
+  status         String
+  totalRows      Int      @default(0)
+  validRows      Int      @default(0)
+  importedRows   Int      @default(0)
+  duplicateRows  Int      @default(0)
+  errorRows      Int      @default(0)
+  notes          String?
+  channelsLast   Channel[]            @relation("LastBatch")
+  observations   ChannelObservation[]
+  errors         ImportError[]
+
+  @@index([uploadedAt])
+  @@index([fileHash])
+  @@index([operator])
+}
+
+model Channel {
+  id                String   @id @default(cuid())
+  channelId         String   @unique
+  channelName       String
+  handle            String?
+  channelUrl        String?
+  subscriberCount   Int?
+  videoCount        Int?
+  viewCount         BigInt?
+  engagementRate    Float?
+  tierRaw           String?
+  tierDerived       String?
+  countryCode       String?
+  joinedDate        DateTime?
+  email             String?
+  emailSource       String?
+  hasEmail          Boolean  @default(false)
+  contactStatus     String
+  whatsapp          String?
+  phone             String?
+  facebook          String?
+  instagram         String?
+  tiktok            String?
+  twitter           String?
+  linktree          String?
+  channelLinks      String?
+  contactSummary    String?
+  description       String?
+  keywords          String?
+  categories        String?
+  searchKeyword     String?
+  targetCountry     String?
+  crawledAt         DateTime?
+  firstSeenAt       DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+  observationCount  Int      @default(1)
+  firstBatchId     String
+  lastBatchId      String
+  lastBatch        UploadBatch          @relation("LastBatch", fields: [lastBatchId], references: [id])
+  observations     ChannelObservation[]
+
+  @@index([countryCode])
+  @@index([tierDerived])
+  @@index([hasEmail])
+  @@index([searchKeyword])
+  @@index([subscriberCount])
+  @@index([lastSeenAt])
+}
+
+model ChannelObservation {
+  id              String   @id @default(cuid())
+  channelRowId    String
+  channel         Channel  @relation(fields: [channelRowId], references: [id], onDelete: Cascade)
+  batchId         String
+  batch           UploadBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  searchKeyword   String?
+  targetCountry   String?
+  crawledAt       DateTime?
+  subscriberCount Int?
+  viewCount       BigInt?
+  engagementRate  Float?
+  createdAt       DateTime @default(now())
+
+  @@index([channelRowId])
+  @@index([batchId])
+  @@index([crawledAt])
+}
+
+model ImportError {
+  id        String   @id @default(cuid())
+  batchId   String
+  batch     UploadBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNumber Int
+  reason    String
+  rawRow    String
+  createdAt DateTime @default(now())
+
+  @@index([batchId])
+}
