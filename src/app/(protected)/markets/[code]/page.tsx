@@ -145,7 +145,24 @@ export default async function MarketPage({
                   <DailyOperatorLines rows={stats.dailyOperator} metric="observations" />
                 </div>
                 <div className="border rounded-lg overflow-hidden">
-                  <DailyOperatorTable rows={stats.dailyOperator} />
+                  <DailyOperatorTable
+                    rows={stats.dailyOperator}
+                    operatorTotals={Object.fromEntries(
+                      stats.operatorTotals.map((o) => [
+                        o.operator,
+                        {
+                          observations: o.observations,
+                          uniqueChannels: o.uniqueChannels,
+                          withEmail: o.withEmail,
+                        },
+                      ]),
+                    )}
+                    globalTotals={{
+                      observations: stats.totalObservations,
+                      uniqueChannels: stats.totalChannels,
+                      withEmail: stats.withEmail,
+                    }}
+                  />
                 </div>
               </>
             )}

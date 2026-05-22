@@ -179,21 +179,54 @@ export async function getDashboardStats(): Promise<DashboardStats> {
         lastUploadAt: number | null;
       }[]
     >`
+      WITH batch_counts AS (
+        SELECT
+          operator,
+          SUM(CASE WHEN status = 'imported' THEN 1 ELSE 0 END) AS batches,
+          SUM(CASE WHEN status = 'previewing' THEN 1 ELSE 0 END) AS previewBatches,
+          MAX(uploadedAt) AS lastUploadAt
+        FROM UploadBatch
+        WHERE operator IS NOT NULL
+        GROUP BY operator
+      ),
+      obs_counts AS (
+        SELECT ub.operator AS operator, COUNT(co.id) AS observations
+        FROM UploadBatch ub
+        JOIN ChannelObservation co ON co.batchId = ub.id
+        WHERE ub.operator IS NOT NULL AND ub.status = 'imported'
+        GROUP BY ub.operator
+      ),
+      operator_channels AS (
+        SELECT DISTINCT
+          ub.operator AS operator,
+          co.channelRowId AS channelRowId
+        FROM UploadBatch ub
+        JOIN ChannelObservation co ON co.batchId = ub.id
+        WHERE ub.operator IS NOT NULL AND ub.status = 'imported'
+      ),
+      channel_stats AS (
+        SELECT
+          oc.operator AS operator,
+          COUNT(*) AS uniqueChannels,
+          SUM(CASE WHEN c.hasEmail = 1 THEN 1 ELSE 0 END) AS withEmail,
+          COALESCE(AVG(c.subscriberCount), 0) AS avgSubscribers
+        FROM operator_channels oc
+        JOIN Channel c ON c.id = oc.channelRowId
+        GROUP BY oc.operator
+      )
       SELECT
-        ub.operator AS operator,
-        SUM(CASE WHEN ub.status = 'imported' THEN 1 ELSE 0 END) AS batches,
-        SUM(CASE WHEN ub.status = 'previewing' THEN 1 ELSE 0 END) AS previewBatches,
-        COUNT(co.id) AS observations,
-        COUNT(DISTINCT co.channelRowId) AS uniqueChannels,
-        SUM(CASE WHEN c.hasEmail = 1 THEN 1 ELSE 0 END) AS withEmail,
-        COALESCE(AVG(c.subscriberCount), 0) AS avgSubscribers,
-        MAX(ub.uploadedAt) AS lastUploadAt
-      FROM UploadBatch ub
-      LEFT JOIN ChannelObservation co ON co.batchId = ub.id
-      LEFT JOIN Channel c ON c.id = co.channelRowId
-      WHERE ub.operator IS NOT NULL
-      GROUP BY ub.operator
-      ORDER BY uniqueChannels DESC, ub.operator
+        bc.operator AS operator,
+        COALESCE(bc.batches, 0) AS batches,
+        COALESCE(bc.previewBatches, 0) AS previewBatches,
+        COALESCE(oc.observations, 0) AS observations,
+        COALESCE(cs.uniqueChannels, 0) AS uniqueChannels,
+        COALESCE(cs.withEmail, 0) AS withEmail,
+        COALESCE(cs.avgSubscribers, 0) AS avgSubscribers,
+        bc.lastUploadAt AS lastUploadAt
+      FROM batch_counts bc
+      LEFT JOIN obs_counts oc ON oc.operator = bc.operator
+      LEFT JOIN channel_stats cs ON cs.operator = bc.operator
+      ORDER BY uniqueChannels DESC, bc.operator
     `,
     prisma.$queryRaw<
       {
@@ -209,11 +242,11 @@ export async function getDashboardStats(): Promise<DashboardStats> {
         ub.operator AS operator,
         COUNT(co.id) AS observations,
         COUNT(DISTINCT co.channelRowId) AS uniqueChannels,
-        SUM(CASE WHEN c.hasEmail = 1 THEN 1 ELSE 0 END) AS withEmail
+        COUNT(DISTINCT CASE WHEN c.hasEmail = 1 THEN co.channelRowId END) AS withEmail
       FROM UploadBatch ub
-      LEFT JOIN ChannelObservation co ON co.batchId = ub.id
-      LEFT JOIN Channel c ON c.id = co.channelRowId
-      WHERE ub.operator IS NOT NULL AND ub.status = 'imported' AND co.id IS NOT NULL
+      JOIN ChannelObservation co ON co.batchId = ub.id
+      JOIN Channel c ON c.id = co.channelRowId
+      WHERE ub.operator IS NOT NULL AND ub.status = 'imported'
       GROUP BY day, ub.operator
       ORDER BY day DESC, observations DESC
     `,

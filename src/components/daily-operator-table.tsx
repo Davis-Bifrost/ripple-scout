@@ -19,10 +19,27 @@ const METRIC_LABELS: Record<Metric, string> = {
   withEmail: "With email",
 };
 
+// Channel-grain metrics — a channel can appear in multiple (day, operator)
+// cells, so cell sums double-count. When provided, the footer uses true
+// distinct totals for these metrics instead.
+const DISTINCT_METRICS: ReadonlyArray<Metric> = ["uniqueChannels", "withEmail"];
+
+export type OperatorTotals = Partial<
+  Record<Metric, number | null | undefined>
+>;
+
 type SortKey = "day" | "total" | string; // string = operator name (column)
 type SortDir = "asc" | "desc";
 
-export function DailyOperatorTable({ rows }: { rows: Row[] }) {
+export function DailyOperatorTable({
+  rows,
+  operatorTotals,
+  globalTotals,
+}: {
+  rows: Row[];
+  operatorTotals?: Record<string, OperatorTotals>;
+  globalTotals?: OperatorTotals;
+}) {
   const [metric, setMetric] = useState<Metric>("observations");
   const [sortKey, setSortKey] = useState<SortKey>("day");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -91,7 +108,15 @@ export function DailyOperatorTable({ rows }: { rows: Row[] }) {
     );
   }
 
-  const grandTotal = Array.from(perOperatorTotal.values()).reduce((a, b) => a + b, 0);
+  const cellSumGrandTotal = Array.from(perOperatorTotal.values()).reduce(
+    (a, b) => a + b,
+    0,
+  );
+  const isDistinctMetric = DISTINCT_METRICS.includes(metric);
+  const grandTotal =
+    isDistinctMetric && globalTotals && typeof globalTotals[metric] === "number"
+      ? (globalTotals[metric] as number)
+      : cellSumGrandTotal;
 
   return (
     <div className="space-y-2">
@@ -115,6 +140,13 @@ export function DailyOperatorTable({ rows }: { rows: Row[] }) {
           Click any column header to sort.
         </span>
       </div>
+      {isDistinctMetric && (operatorTotals || globalTotals) && (
+        <p className="px-4 text-[11px] text-muted-foreground">
+          Per-day cells dedupe within (day × operator); footer totals dedupe
+          globally per operator and overall — so footer totals can be lower
+          than the sum of the column.
+        </p>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 sticky top-0">
@@ -159,14 +191,23 @@ export function DailyOperatorTable({ rows }: { rows: Row[] }) {
               <td className="px-3 py-2 text-xs uppercase text-muted-foreground">
                 Total
               </td>
-              {operators.map((op) => (
-                <td
-                  key={op}
-                  className="px-3 py-2 text-right tabular-nums font-medium"
-                >
-                  {formatNumber(perOperatorTotal.get(op) ?? 0)}
-                </td>
-              ))}
+              {operators.map((op) => {
+                const distinct =
+                  isDistinctMetric &&
+                  operatorTotals?.[op] &&
+                  typeof operatorTotals[op][metric] === "number"
+                    ? (operatorTotals[op][metric] as number)
+                    : null;
+                const value = distinct ?? (perOperatorTotal.get(op) ?? 0);
+                return (
+                  <td
+                    key={op}
+                    className="px-3 py-2 text-right tabular-nums font-medium"
+                  >
+                    {formatNumber(value)}
+                  </td>
+                );
+              })}
               <td className="px-3 py-2 text-right tabular-nums font-semibold">
                 {formatNumber(grandTotal)}
               </td>
