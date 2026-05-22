@@ -86,9 +86,21 @@ export default async function DashboardPage() {
         </ChartCard>
       </div>
 
-      <OperatorSection rows={s.byOperator} />
+      <OperatorSection
+        rows={s.byOperator}
+        globalChannels={s.totalChannels}
+        globalWithEmail={s.withEmail}
+        globalEmailRate={s.emailRate}
+        globalAvgSubscribers={s.avgSubscribers}
+      />
 
-      <DailyActivitySection rows={s.dailyOperator} />
+      <DailyActivitySection
+        rows={s.dailyOperator}
+        byOperator={s.byOperator}
+        globalChannels={s.totalChannels}
+        globalWithEmail={s.withEmail}
+        globalObservations={s.totalObservations}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <TopChannelsTable
@@ -165,14 +177,40 @@ function ChartCard({
 
 function OperatorSection({
   rows,
+  globalChannels,
+  globalWithEmail,
+  globalEmailRate,
+  globalAvgSubscribers,
 }: {
   rows: Awaited<ReturnType<typeof getDashboardStats>>["byOperator"];
+  globalChannels: number;
+  globalWithEmail: number;
+  globalEmailRate: number;
+  globalAvgSubscribers: number;
 }) {
   if (!rows.length) return null;
 
   const chartData = rows.map((r) => ({ key: r.operator, count: r.uniqueChannels }));
   const top = [...rows].sort((a, b) => b.uniqueChannels - a.uniqueChannels);
-  const totalChannels = rows.reduce((sum, r) => sum + r.uniqueChannels, 0);
+  // Additive totals — batches / previewBatches / observations partition cleanly
+  // by operator (each row belongs to exactly one operator), so summing rows
+  // gives the right answer.
+  const totals = rows.reduce(
+    (acc, r) => {
+      acc.batches += r.batches;
+      acc.previewBatches += r.previewBatches;
+      acc.observations += r.observations;
+      const last = r.lastUploadAt ? new Date(r.lastUploadAt).getTime() : 0;
+      if (last > acc.lastUploadMs) acc.lastUploadMs = last;
+      return acc;
+    },
+    { batches: 0, previewBatches: 0, observations: 0, lastUploadMs: 0 },
+  );
+  // Channel-grain totals come from globals, not row sums — a single channel
+  // can be attributed to multiple operators via observations in different
+  // operators' batches, which would double-count in a row sum.
+  const totalChannels = globalChannels;
+  const totalLastUpload = totals.lastUploadMs ? new Date(totals.lastUploadMs) : null;
 
   return (
     <section className="space-y-4">
@@ -244,6 +282,31 @@ function OperatorSection({
                   </tr>
                 ))}
               </tbody>
+              <tfoot className="border-t bg-muted/30 font-medium">
+                <tr>
+                  <td className="px-3 py-2">Total</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatNumber(totals.batches)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {totals.previewBatches ? (
+                      <span className="text-amber-600">{formatNumber(totals.previewBatches)}</span>
+                    ) : (
+                      <span className="text-muted-foreground">0</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatNumber(totals.observations)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatNumber(totalChannels)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatNumber(globalWithEmail)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {totalChannels ? formatPercent(globalEmailRate, 1) : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {totalChannels ? formatNumber(globalAvgSubscribers) : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                    {totalLastUpload ? formatDateTime(totalLastUpload) : "—"}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </div>
@@ -254,12 +317,37 @@ function OperatorSection({
 
 function DailyActivitySection({
   rows,
+  byOperator,
+  globalChannels,
+  globalWithEmail,
+  globalObservations,
 }: {
   rows: Awaited<ReturnType<typeof getDashboardStats>>["dailyOperator"];
+  byOperator: Awaited<ReturnType<typeof getDashboardStats>>["byOperator"];
+  globalChannels: number;
+  globalWithEmail: number;
+  globalObservations: number;
 }) {
   if (!rows.length) return null;
   const distinctDays = new Set(rows.map((r) => r.day)).size;
   const distinctOps = new Set(rows.map((r) => r.operator)).size;
+
+  const operatorTotals: Record<
+    string,
+    { observations: number; uniqueChannels: number; withEmail: number }
+  > = {};
+  for (const op of byOperator) {
+    operatorTotals[op.operator] = {
+      observations: op.observations,
+      uniqueChannels: op.uniqueChannels,
+      withEmail: op.withEmail,
+    };
+  }
+  const globalTotals = {
+    observations: globalObservations,
+    uniqueChannels: globalChannels,
+    withEmail: globalWithEmail,
+  };
 
   return (
     <section className="space-y-4">
@@ -282,7 +370,11 @@ function DailyActivitySection({
       </div>
 
       <div className="border rounded-lg overflow-hidden">
-        <DailyOperatorTable rows={rows} />
+        <DailyOperatorTable
+          rows={rows}
+          operatorTotals={operatorTotals}
+          globalTotals={globalTotals}
+        />
       </div>
     </section>
   );

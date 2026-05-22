@@ -17,6 +17,12 @@ export type MarketStats = {
   byTier: { key: string; count: number }[];
   byContactStatus: { key: string; count: number }[];
   byOperator: { key: string; count: number }[];
+  operatorTotals: {
+    operator: string;
+    observations: number;
+    uniqueChannels: number;
+    withEmail: number;
+  }[];
   byCountryOverlap: { key: string; count: number }[]; // creators' home countries in the targeting view
   byKeyword: { key: string; count: number }[];
   topBySubs: TopChannelRow[];
@@ -124,8 +130,18 @@ export async function getMarketStats(
       orderBy: { _count: { searchKeyword: "desc" } },
       take: 25,
     }),
-    prisma.$queryRaw<{ operator: string; count: number }[]>`
-      SELECT ub.operator AS operator, COUNT(DISTINCT c.id) AS count
+    prisma.$queryRaw<
+      {
+        operator: string;
+        uniqueChannels: number;
+        withEmail: number;
+        observations: number;
+      }[]
+    >`
+      SELECT ub.operator AS operator,
+             COUNT(DISTINCT c.id) AS uniqueChannels,
+             COUNT(DISTINCT CASE WHEN c.hasEmail = 1 THEN c.id END) AS withEmail,
+             COUNT(co.id) AS observations
       FROM Channel c
       JOIN ChannelObservation co ON co.channelRowId = c.id
       JOIN UploadBatch ub ON ub.id = co.batchId
@@ -136,7 +152,7 @@ export async function getMarketStats(
             ? Prisma.sql`c.targetCountry = ${code}`
             : Prisma.sql`(c.countryCode = ${code} OR c.targetCountry = ${code})`}
       GROUP BY ub.operator
-      ORDER BY count DESC
+      ORDER BY uniqueChannels DESC
     `,
     prisma.$queryRaw<
       {
@@ -152,7 +168,7 @@ export async function getMarketStats(
         ub.operator AS operator,
         COUNT(co.id) AS observations,
         COUNT(DISTINCT co.channelRowId) AS uniqueChannels,
-        SUM(CASE WHEN c.hasEmail = 1 THEN 1 ELSE 0 END) AS withEmail
+        COUNT(DISTINCT CASE WHEN c.hasEmail = 1 THEN co.channelRowId END) AS withEmail
       FROM UploadBatch ub
       JOIN ChannelObservation co ON co.batchId = ub.id
       JOIN Channel c ON c.id = co.channelRowId
@@ -192,9 +208,15 @@ export async function getMarketStats(
     key: r.searchKeyword ?? "—",
     count: r._count._all,
   }));
-  const byOperator = operatorRaw.map((r) => ({
+  const operatorTotals = operatorRaw.map((r) => ({
+    operator: r.operator,
+    observations: Number(r.observations),
+    uniqueChannels: Number(r.uniqueChannels),
+    withEmail: Number(r.withEmail),
+  }));
+  const byOperator = operatorTotals.map((r) => ({
     key: r.operator,
-    count: Number(r.count),
+    count: r.uniqueChannels,
   }));
 
   const topBySubs: TopChannelRow[] = topRows.map((r) => ({
@@ -231,6 +253,7 @@ export async function getMarketStats(
     byTier,
     byContactStatus,
     byOperator,
+    operatorTotals,
     byCountryOverlap,
     byKeyword,
     topBySubs,
