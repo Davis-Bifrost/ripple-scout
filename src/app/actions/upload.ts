@@ -52,7 +52,7 @@ export async function uploadCsv(formData: FormData): Promise<UploadResult[]> {
   return results;
 }
 
-async function uploadOne(file: File): Promise<UploadResult> {
+export async function uploadOne(file: File, driveFileId?: string): Promise<UploadResult> {
   const filename = file.name;
   try {
     if (!filename.toLowerCase().endsWith(".csv")) {
@@ -93,6 +93,7 @@ async function uploadOne(file: File): Promise<UploadResult> {
         operator: extractOperator(filename),
         fileSize: file.size,
         fileHash,
+        driveFileId: driveFileId ?? null,
         status: "previewing",
         totalRows: parsed.totalRows,
         validRows: parsed.validRows.length,

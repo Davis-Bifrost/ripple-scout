@@ -7,3 +7,7 @@ data/*.db-journal
 uploads/
 *.log
 .DS_Store
+
+# Google service account credentials
+prisma/*-service-account*.json
+prisma/affiliate-ai-*.json

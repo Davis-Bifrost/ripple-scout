@@ -13,6 +13,7 @@ model UploadBatch {
   operator       String?
   fileSize       Int
   fileHash       String
+  driveFileId    String?
   uploadedAt     DateTime @default(now())
   status         String
   totalRows      Int      @default(0)
@@ -28,6 +29,7 @@ model UploadBatch {
   @@index([uploadedAt])
   @@index([fileHash])
   @@index([operator])
+  @@index([driveFileId])
 }
 
 model Channel {

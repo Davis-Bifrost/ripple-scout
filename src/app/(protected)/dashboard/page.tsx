@@ -194,17 +194,20 @@ function OperatorSection({
   const top = [...rows].sort((a, b) => b.uniqueChannels - a.uniqueChannels);
   // Additive totals — batches / previewBatches / observations partition cleanly
   // by operator (each row belongs to exactly one operator), so summing rows
-  // gives the right answer.
+  // gives the right answer. malaysiaCount is summed at row grain; like the
+  // other channel-grain cell sums, it can over-count when a channel is
+  // attributed to multiple operators.
   const totals = rows.reduce(
     (acc, r) => {
       acc.batches += r.batches;
       acc.previewBatches += r.previewBatches;
       acc.observations += r.observations;
+      acc.malaysiaCount += r.malaysiaCount;
       const last = r.lastUploadAt ? new Date(r.lastUploadAt).getTime() : 0;
       if (last > acc.lastUploadMs) acc.lastUploadMs = last;
       return acc;
     },
-    { batches: 0, previewBatches: 0, observations: 0, lastUploadMs: 0 },
+    { batches: 0, previewBatches: 0, observations: 0, malaysiaCount: 0, lastUploadMs: 0 },
   );
   // Channel-grain totals come from globals, not row sums — a single channel
   // can be attributed to multiple operators via observations in different
@@ -247,6 +250,7 @@ function OperatorSection({
                   <th className="px-3 py-2 text-xs font-medium text-muted-foreground text-right">With email</th>
                   <th className="px-3 py-2 text-xs font-medium text-muted-foreground text-right">Email rate</th>
                   <th className="px-3 py-2 text-xs font-medium text-muted-foreground text-right">Avg subs</th>
+                  <th className="px-3 py-2 text-xs font-medium text-muted-foreground text-right">🇲🇾 Malaysia</th>
                   <th className="px-3 py-2 text-xs font-medium text-muted-foreground">Last upload</th>
                 </tr>
               </thead>
@@ -276,6 +280,7 @@ function OperatorSection({
                       {r.uniqueChannels ? formatPercent(r.emailRate, 1) : "—"}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatNumber(r.avgSubscribers)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatNumber(r.malaysiaCount)}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">
                       {r.lastUploadAt ? formatDateTime(r.lastUploadAt) : "—"}
                     </td>
@@ -302,6 +307,7 @@ function OperatorSection({
                   <td className="px-3 py-2 text-right tabular-nums">
                     {totalChannels ? formatNumber(globalAvgSubscribers) : "—"}
                   </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatNumber(totals.malaysiaCount)}</td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">
                     {totalLastUpload ? formatDateTime(totalLastUpload) : "—"}
                   </td>

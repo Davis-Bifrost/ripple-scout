@@ -30,6 +30,7 @@ export type OperatorRow = {
   withEmail: number;
   emailRate: number;
   avgSubscribers: number;
+  malaysiaCount: number;
   lastUploadAt: string | null;
 };
 
@@ -176,6 +177,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
         uniqueChannels: number;
         withEmail: number;
         avgSubscribers: number;
+        malaysiaCount: number;
         lastUploadAt: number | null;
       }[]
     >`
@@ -209,7 +211,8 @@ export async function getDashboardStats(): Promise<DashboardStats> {
           oc.operator AS operator,
           COUNT(*) AS uniqueChannels,
           SUM(CASE WHEN c.hasEmail = 1 THEN 1 ELSE 0 END) AS withEmail,
-          COALESCE(AVG(c.subscriberCount), 0) AS avgSubscribers
+          COALESCE(AVG(c.subscriberCount), 0) AS avgSubscribers,
+          SUM(CASE WHEN c.countryCode = 'MY' THEN 1 ELSE 0 END) AS malaysiaCount
         FROM operator_channels oc
         JOIN Channel c ON c.id = oc.channelRowId
         GROUP BY oc.operator
@@ -222,6 +225,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
         COALESCE(cs.uniqueChannels, 0) AS uniqueChannels,
         COALESCE(cs.withEmail, 0) AS withEmail,
         COALESCE(cs.avgSubscribers, 0) AS avgSubscribers,
+        COALESCE(cs.malaysiaCount, 0) AS malaysiaCount,
         bc.lastUploadAt AS lastUploadAt
       FROM batch_counts bc
       LEFT JOIN obs_counts oc ON oc.operator = bc.operator
@@ -319,6 +323,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       withEmail: withE,
       emailRate: unique ? (withE / unique) * 100 : 0,
       avgSubscribers: Math.round(Number(r.avgSubscribers)),
+      malaysiaCount: Number(r.malaysiaCount),
       lastUploadAt: lastMs ? new Date(lastMs).toISOString() : null,
     };
   });

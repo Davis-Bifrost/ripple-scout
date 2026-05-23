@@ -1,4 +1,5 @@
 import { UploadDropzone } from "@/components/upload-dropzone";
+import { DriveImport } from "@/components/drive-import";
 
 export default function UploadPage() {
   return (
@@ -12,6 +13,7 @@ export default function UploadPage() {
           to inspect a staged preview before committing.
         </p>
       </div>
+      <DriveImport />
       <UploadDropzone />
     </div>
   );
