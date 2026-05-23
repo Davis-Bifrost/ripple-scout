@@ -158,91 +158,65 @@ export async function commitBatch(batchId: string): Promise<{ ok: boolean; error
   let updated = 0;
   let skipped = 0;
 
-  const CHUNK = 200;
+  const CHUNK = 100;
+  const TX_TIMEOUT_MS = 30_000;
   const now = new Date();
 
   for (let i = 0; i < classified.length; i += CHUNK) {
     const chunk = classified.slice(i, i + CHUNK);
-    await prisma.$transaction(async (tx) => {
-      for (const row of chunk) {
-        if (row.classification === "intra_batch_duplicate") {
-          skipped++;
-          continue;
-        }
+    await prisma.$transaction(
+      async (tx) => {
+        for (const row of chunk) {
+          if (row.classification === "intra_batch_duplicate") {
+            skipped++;
+            continue;
+          }
 
-        const channelData = {
-          channelName: row.channelName,
-          handle: row.handle,
-          channelUrl: row.channelUrl,
-          subscriberCount: row.subscriberCount,
-          videoCount: row.videoCount,
-          viewCount: row.viewCount,
-          engagementRate: row.engagementRate,
-          tierRaw: row.tierRaw,
-          tierDerived: row.tierDerived,
-          countryCode: row.countryCode,
-          joinedDate: row.joinedDate,
-          email: row.email,
-          emailSource: row.emailSource,
-          hasEmail: row.hasEmail,
-          contactStatus: row.contactStatus,
-          whatsapp: row.whatsapp,
-          phone: row.phone,
-          facebook: row.facebook,
-          instagram: row.instagram,
-          tiktok: row.tiktok,
-          twitter: row.twitter,
-          linktree: row.linktree,
-          channelLinks: row.channelLinks,
-          contactSummary: row.contactSummary,
-          searchKeyword: row.searchKeyword,
-          targetCountry: row.targetCountry,
-          crawledAt: row.crawledAt,
-          lastSeenAt: now,
-          lastBatchId: batchId,
-        };
+          const channelData = {
+            channelName: row.channelName,
+            handle: row.handle,
+            channelUrl: row.channelUrl,
+            subscriberCount: row.subscriberCount,
+            videoCount: row.videoCount,
+            viewCount: row.viewCount,
+            engagementRate: row.engagementRate,
+            tierRaw: row.tierRaw,
+            tierDerived: row.tierDerived,
+            countryCode: row.countryCode,
+            joinedDate: row.joinedDate,
+            email: row.email,
+            emailSource: row.emailSource,
+            hasEmail: row.hasEmail,
+            contactStatus: row.contactStatus,
+            whatsapp: row.whatsapp,
+            phone: row.phone,
+            facebook: row.facebook,
+            instagram: row.instagram,
+            tiktok: row.tiktok,
+            twitter: row.twitter,
+            linktree: row.linktree,
+            channelLinks: row.channelLinks,
+            contactSummary: row.contactSummary,
+            searchKeyword: row.searchKeyword,
+            targetCountry: row.targetCountry,
+            crawledAt: row.crawledAt,
+            lastSeenAt: now,
+            lastBatchId: batchId,
+          };
 
-        if (row.classification === "new") {
-          const created = await tx.channel.create({
-            data: {
-              channelId: row.channelId,
-              ...channelData,
-              description: row.description,
-              keywords: row.keywords,
-              categories: row.categories,
-              firstSeenAt: now,
-              firstBatchId: batchId,
-              observationCount: 1,
-            },
-          });
-          await tx.channelObservation.create({
-            data: {
-              channelRowId: created.id,
-              batchId,
-              searchKeyword: row.searchKeyword,
-              targetCountry: row.targetCountry,
-              crawledAt: row.crawledAt,
-              subscriberCount: row.subscriberCount,
-              viewCount: row.viewCount,
-              engagementRate: row.engagementRate,
-            },
-          });
-          imported++;
-        } else {
-          // update — never overwrite text fields with empty new values
-          const existing = await tx.channel.findUnique({
-            where: { channelId: row.channelId },
-            select: {
-              id: true,
-              description: true,
-              keywords: true,
-              categories: true,
-              observationCount: true,
-            },
-          });
-          if (!existing) {
-            // Race: got classified as update but row is gone. Treat as new.
-            const created = await tx.channel.create({
+          const observationData = {
+            batchId,
+            searchKeyword: row.searchKeyword,
+            targetCountry: row.targetCountry,
+            crawledAt: row.crawledAt,
+            subscriberCount: row.subscriberCount,
+            viewCount: row.viewCount,
+            engagementRate: row.engagementRate,
+          };
+
+          if (row.classification === "new") {
+            // Single round-trip: create channel + nested observation
+            await tx.channel.create({
               data: {
                 channelId: row.channelId,
                 ...channelData,
@@ -252,50 +226,34 @@ export async function commitBatch(batchId: string): Promise<{ ok: boolean; error
                 firstSeenAt: now,
                 firstBatchId: batchId,
                 observationCount: 1,
-              },
-            });
-            await tx.channelObservation.create({
-              data: {
-                channelRowId: created.id,
-                batchId,
-                searchKeyword: row.searchKeyword,
-                targetCountry: row.targetCountry,
-                crawledAt: row.crawledAt,
-                subscriberCount: row.subscriberCount,
-                viewCount: row.viewCount,
-                engagementRate: row.engagementRate,
+                observations: { create: observationData },
               },
             });
             imported++;
-            continue;
+          } else {
+            // Single round-trip: update by unique channelId + nested observation create.
+            // Only overwrite description/keywords/categories when the new value is non-empty.
+            await tx.channel.update({
+              where: { channelId: row.channelId },
+              data: {
+                ...channelData,
+                ...(row.description !== null
+                  ? { description: row.description }
+                  : {}),
+                ...(row.keywords !== null ? { keywords: row.keywords } : {}),
+                ...(row.categories !== null
+                  ? { categories: row.categories }
+                  : {}),
+                observationCount: { increment: 1 },
+                observations: { create: observationData },
+              },
+            });
+            updated++;
           }
-
-          await tx.channel.update({
-            where: { id: existing.id },
-            data: {
-              ...channelData,
-              description: row.description ?? existing.description,
-              keywords: row.keywords ?? existing.keywords,
-              categories: row.categories ?? existing.categories,
-              observationCount: existing.observationCount + 1,
-            },
-          });
-          await tx.channelObservation.create({
-            data: {
-              channelRowId: existing.id,
-              batchId,
-              searchKeyword: row.searchKeyword,
-              targetCountry: row.targetCountry,
-              crawledAt: row.crawledAt,
-              subscriberCount: row.subscriberCount,
-              viewCount: row.viewCount,
-              engagementRate: row.engagementRate,
-            },
-          });
-          updated++;
         }
-      }
-    });
+      },
+      { timeout: TX_TIMEOUT_MS, maxWait: 10_000 },
+    );
   }
 
   await prisma.uploadBatch.update({
