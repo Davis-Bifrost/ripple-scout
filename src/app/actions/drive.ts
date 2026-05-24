@@ -4,7 +4,17 @@ import { listCsvFiles, downloadFile, type DriveFile } from "@/lib/drive";
 import { uploadOne, commitBatch } from "@/app/actions/upload";
 import { prisma } from "@/lib/db";
 import { revalidatePath } from "next/cache";
+import { actionLogger } from "@/lib/logger";
+import { z } from "zod";
 import type { UploadResult } from "@/app/actions/upload";
+
+const log = actionLogger("drive");
+
+const driveFileIdSchema = z.string().min(1).max(200);
+const importInputSchema = z.object({
+  fileIds: z.array(driveFileIdSchema).min(1).max(500),
+  fileNames: z.record(z.string().min(1).max(200), z.string().min(1).max(500)),
+});
 
 export type { DriveFile };
 
@@ -19,9 +29,12 @@ export async function listDriveFilesAction(): Promise<
 > {
   try {
     const files = await listCsvFiles();
+    log.info({ count: files.length }, "drive_list_ok");
     return { ok: true, files };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Failed to list Drive files" };
+    const error = err instanceof Error ? err.message : "Failed to list Drive files";
+    log.error({ error }, "drive_list_failed");
+    return { ok: false, error };
   }
 }
 
@@ -29,10 +42,21 @@ export async function importFromDriveAction(
   fileIds: string[],
   fileNames: Record<string, string>,
 ): Promise<UploadResult[]> {
+  const parsed = importInputSchema.safeParse({ fileIds, fileNames });
+  if (!parsed.success) {
+    log.warn({ issue: parsed.error.issues[0]?.message }, "drive_import_invalid_input");
+    return [
+      {
+        filename: "",
+        ok: false,
+        error: "Invalid input to importFromDriveAction",
+      },
+    ];
+  }
   const results: UploadResult[] = [];
 
-  for (const id of fileIds) {
-    const name = fileNames[id] ?? `${id}.csv`;
+  for (const id of parsed.data.fileIds) {
+    const name = parsed.data.fileNames[id] ?? `${id}.csv`;
     try {
       const buffer = await downloadFile(id);
       const file = new File([new Uint8Array(buffer)], name, { type: "text/csv" });
@@ -65,6 +89,8 @@ export async function importFromDriveAction(
 export async function syncDriveAction(): Promise<
   { ok: true; result: SyncResult } | { ok: false; error: string }
 > {
+  const t0 = Date.now();
+  log.info("drive_sync_start");
   try {
     const driveFiles = await listCsvFiles();
 
@@ -130,11 +156,22 @@ export async function syncDriveAction(): Promise<
     revalidatePath("/batches");
     revalidatePath("/channels");
 
+    log.info(
+      {
+        importedCount: imported.length,
+        importedOkCount: imported.filter((r) => r.ok && r.imported).length,
+        skippedCount,
+        durationMs: Date.now() - t0,
+      },
+      "drive_sync_ok",
+    );
     return {
       ok: true,
       result: { imported, skippedCount, skippedNames },
     };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Sync failed" };
+    const error = err instanceof Error ? err.message : "Sync failed";
+    log.error({ error, durationMs: Date.now() - t0 }, "drive_sync_failed");
+    return { ok: false, error };
   }
 }

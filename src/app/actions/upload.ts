@@ -8,6 +8,12 @@ import { classifyRows, summarizeClassification } from "@/lib/csv/dedup";
 import { savePreview, loadPreview, discardPreview } from "@/lib/csv/storage";
 import { extractOperator } from "@/lib/csv/operator";
 import { revalidatePath } from "next/cache";
+import { actionLogger } from "@/lib/logger";
+import { z } from "zod";
+
+const log = actionLogger("upload");
+
+const batchIdSchema = z.string().min(1).max(60);
 
 const MAX_BYTES = 60 * 1024 * 1024; // 60 MB
 
@@ -54,6 +60,8 @@ export async function uploadCsv(formData: FormData): Promise<UploadResult[]> {
 
 export async function uploadOne(file: File, driveFileId?: string): Promise<UploadResult> {
   const filename = file.name;
+  const t0 = Date.now();
+  log.info({ filename, sizeKb: Math.round(file.size / 1024), driveFileId }, "upload_one_start");
   try {
     if (!filename.toLowerCase().endsWith(".csv")) {
       return { filename, ok: false, error: "Not a .csv file" };
@@ -105,6 +113,18 @@ export async function uploadOne(file: File, driveFileId?: string): Promise<Uploa
 
     await savePreview(batch.id, parsed.validRows, parsed.problems);
 
+    log.info(
+      {
+        filename,
+        batchId: batch.id,
+        totalRows: parsed.totalRows,
+        validRows: parsed.validRows.length,
+        errorRows: parsed.problems.length,
+        durationMs: Date.now() - t0,
+      },
+      "upload_one_ok",
+    );
+
     return {
       filename,
       ok: true,
@@ -118,170 +138,220 @@ export async function uploadOne(file: File, driveFileId?: string): Promise<Uploa
       errorRows: parsed.problems.length,
     };
   } catch (err) {
-    return {
-      filename,
-      ok: false,
-      error: err instanceof Error ? err.message : "Unknown error",
-    };
+    const error = err instanceof Error ? err.message : "Unknown error";
+    log.error({ filename, error, durationMs: Date.now() - t0 }, "upload_one_failed");
+    return { filename, ok: false, error };
   }
 }
 
 export async function commitBatch(batchId: string): Promise<{ ok: boolean; error?: string }> {
-  const batch = await prisma.uploadBatch.findUnique({ where: { id: batchId } });
-  if (!batch) return { ok: false, error: "Batch not found" };
-  if (batch.status !== "previewing") {
-    return { ok: false, error: `Batch is in '${batch.status}' state` };
+  const t0 = Date.now();
+  const idParse = batchIdSchema.safeParse(batchId);
+  if (!idParse.success) {
+    return { ok: false, error: "Invalid batchId" };
   }
-
-  const preview = await loadPreview(batchId);
-  if (!preview) {
-    return { ok: false, error: "Preview data missing — please re-upload" };
-  }
-
-  // Persist parse-time problems
-  if (preview.problems.length) {
-    await prisma.importError.createMany({
-      data: preview.problems.map((p) => ({
-        batchId,
-        rowNumber: p.rowNumber,
-        reason: p.reason,
-        rawRow: p.rawRow,
-      })),
-    });
-  }
-
-  // Pre-classify against current DB state (snapshot inside the commit run too)
-  const classified = await classifyRows(preview.rows);
-
-  // Stats
-  let imported = 0;
-  let updated = 0;
-  let skipped = 0;
-
-  const CHUNK = 100;
-  const TX_TIMEOUT_MS = 30_000;
-  const now = new Date();
-
-  for (let i = 0; i < classified.length; i += CHUNK) {
-    const chunk = classified.slice(i, i + CHUNK);
-    await prisma.$transaction(
-      async (tx) => {
-        for (const row of chunk) {
-          if (row.classification === "intra_batch_duplicate") {
-            skipped++;
-            continue;
-          }
-
-          const channelData = {
-            channelName: row.channelName,
-            handle: row.handle,
-            channelUrl: row.channelUrl,
-            subscriberCount: row.subscriberCount,
-            videoCount: row.videoCount,
-            viewCount: row.viewCount,
-            engagementRate: row.engagementRate,
-            tierRaw: row.tierRaw,
-            tierDerived: row.tierDerived,
-            countryCode: row.countryCode,
-            joinedDate: row.joinedDate,
-            email: row.email,
-            emailSource: row.emailSource,
-            hasEmail: row.hasEmail,
-            contactStatus: row.contactStatus,
-            whatsapp: row.whatsapp,
-            phone: row.phone,
-            facebook: row.facebook,
-            instagram: row.instagram,
-            tiktok: row.tiktok,
-            twitter: row.twitter,
-            linktree: row.linktree,
-            channelLinks: row.channelLinks,
-            contactSummary: row.contactSummary,
-            searchKeyword: row.searchKeyword,
-            targetCountry: row.targetCountry,
-            crawledAt: row.crawledAt,
-            lastSeenAt: now,
-            lastBatchId: batchId,
-          };
-
-          const observationData = {
-            batchId,
-            searchKeyword: row.searchKeyword,
-            targetCountry: row.targetCountry,
-            crawledAt: row.crawledAt,
-            subscriberCount: row.subscriberCount,
-            viewCount: row.viewCount,
-            engagementRate: row.engagementRate,
-          };
-
-          if (row.classification === "new") {
-            // Single round-trip: create channel + nested observation
-            await tx.channel.create({
-              data: {
-                channelId: row.channelId,
-                ...channelData,
-                description: row.description,
-                keywords: row.keywords,
-                categories: row.categories,
-                firstSeenAt: now,
-                firstBatchId: batchId,
-                observationCount: 1,
-                observations: { create: observationData },
-              },
-            });
-            imported++;
-          } else {
-            // Single round-trip: update by unique channelId + nested observation create.
-            // Only overwrite description/keywords/categories when the new value is non-empty.
-            await tx.channel.update({
-              where: { channelId: row.channelId },
-              data: {
-                ...channelData,
-                ...(row.description !== null
-                  ? { description: row.description }
-                  : {}),
-                ...(row.keywords !== null ? { keywords: row.keywords } : {}),
-                ...(row.categories !== null
-                  ? { categories: row.categories }
-                  : {}),
-                observationCount: { increment: 1 },
-                observations: { create: observationData },
-              },
-            });
-            updated++;
-          }
-        }
-      },
-      { timeout: TX_TIMEOUT_MS, maxWait: 10_000 },
-    );
-  }
-
-  await prisma.uploadBatch.update({
-    where: { id: batchId },
-    data: {
-      status: "imported",
-      importedRows: imported + updated,
-      duplicateRows: updated + skipped,
-      validRows: imported + updated + skipped,
-    },
+  batchId = idParse.data;
+  // Atomic claim: only one caller may transition previewing → committing.
+  // A duplicate call (double-click, retried action, two tabs) finds count=0
+  // and aborts before any observations are written.
+  const claim = await prisma.uploadBatch.updateMany({
+    where: { id: batchId, status: "previewing" },
+    data: { status: "committing" },
   });
+  if (claim.count === 0) {
+    const existing = await prisma.uploadBatch.findUnique({
+      where: { id: batchId },
+      select: { status: true },
+    });
+    if (!existing) {
+      log.warn({ batchId }, "commit_batch_not_found");
+      return { ok: false, error: "Batch not found" };
+    }
+    log.warn({ batchId, status: existing.status }, "commit_batch_claim_blocked");
+    return {
+      ok: false,
+      error: `Cannot commit batch in '${existing.status}' state`,
+    };
+  }
+  log.info({ batchId }, "commit_batch_start");
 
-  await discardPreview(batchId);
+  // From here on, any thrown error must transition status to "failed" so the
+  // batch is not stuck in "committing" forever and a retry isn't blocked.
+  try {
+    const preview = await loadPreview(batchId);
+    if (!preview) {
+      throw new Error("Preview data missing — discard this batch and re-upload");
+    }
 
-  revalidatePath("/dashboard");
-  revalidatePath("/channels");
-  revalidatePath("/batches");
-  revalidatePath(`/batches/${batchId}`);
+    // Persist parse-time problems
+    if (preview.problems.length) {
+      await prisma.importError.createMany({
+        data: preview.problems.map((p) => ({
+          batchId,
+          rowNumber: p.rowNumber,
+          reason: p.reason,
+          rawRow: p.rawRow,
+        })),
+      });
+    }
 
-  return { ok: true };
+    // Pre-classify against current DB state (snapshot inside the commit run too)
+    const classified = await classifyRows(preview.rows);
+
+    // Stats
+    let imported = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    const CHUNK = 100;
+    const TX_TIMEOUT_MS = 30_000;
+    const now = new Date();
+
+    for (let i = 0; i < classified.length; i += CHUNK) {
+      const chunk = classified.slice(i, i + CHUNK);
+      await prisma.$transaction(
+        async (tx) => {
+          for (const row of chunk) {
+            if (row.classification === "intra_batch_duplicate") {
+              skipped++;
+              continue;
+            }
+
+            const channelData = {
+              channelName: row.channelName,
+              handle: row.handle,
+              channelUrl: row.channelUrl,
+              subscriberCount: row.subscriberCount,
+              videoCount: row.videoCount,
+              viewCount: row.viewCount,
+              engagementRate: row.engagementRate,
+              tierRaw: row.tierRaw,
+              tierDerived: row.tierDerived,
+              countryCode: row.countryCode,
+              joinedDate: row.joinedDate,
+              email: row.email,
+              emailSource: row.emailSource,
+              hasEmail: row.hasEmail,
+              contactStatus: row.contactStatus,
+              whatsapp: row.whatsapp,
+              phone: row.phone,
+              facebook: row.facebook,
+              instagram: row.instagram,
+              tiktok: row.tiktok,
+              twitter: row.twitter,
+              linktree: row.linktree,
+              channelLinks: row.channelLinks,
+              contactSummary: row.contactSummary,
+              searchKeyword: row.searchKeyword,
+              targetCountry: row.targetCountry,
+              crawledAt: row.crawledAt,
+              lastSeenAt: now,
+              lastBatchId: batchId,
+            };
+
+            const observationData = {
+              batchId,
+              searchKeyword: row.searchKeyword,
+              targetCountry: row.targetCountry,
+              crawledAt: row.crawledAt,
+              subscriberCount: row.subscriberCount,
+              viewCount: row.viewCount,
+              engagementRate: row.engagementRate,
+            };
+
+            if (row.classification === "new") {
+              await tx.channel.create({
+                data: {
+                  channelId: row.channelId,
+                  ...channelData,
+                  description: row.description,
+                  keywords: row.keywords,
+                  categories: row.categories,
+                  firstSeenAt: now,
+                  firstBatchId: batchId,
+                  observationCount: 1,
+                  observations: { create: observationData },
+                },
+              });
+              imported++;
+            } else {
+              await tx.channel.update({
+                where: { channelId: row.channelId },
+                data: {
+                  ...channelData,
+                  ...(row.description !== null
+                    ? { description: row.description }
+                    : {}),
+                  ...(row.keywords !== null ? { keywords: row.keywords } : {}),
+                  ...(row.categories !== null
+                    ? { categories: row.categories }
+                    : {}),
+                  observationCount: { increment: 1 },
+                  observations: { create: observationData },
+                },
+              });
+              updated++;
+            }
+          }
+        },
+        { timeout: TX_TIMEOUT_MS, maxWait: 10_000 },
+      );
+    }
+
+    await prisma.uploadBatch.update({
+      where: { id: batchId },
+      data: {
+        status: "imported",
+        importedRows: imported + updated,
+        duplicateRows: updated + skipped,
+        validRows: imported + updated + skipped,
+      },
+    });
+
+    await discardPreview(batchId);
+
+    revalidatePath("/dashboard");
+    revalidatePath("/channels");
+    revalidatePath("/batches");
+    revalidatePath(`/batches/${batchId}`);
+
+    log.info(
+      { batchId, imported, updated, skipped, durationMs: Date.now() - t0 },
+      "commit_batch_ok",
+    );
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    log.error({ batchId, error: msg, durationMs: Date.now() - t0 }, "commit_batch_failed");
+    // Best-effort: mark the batch failed so it isn't stuck in 'committing'
+    // and the operator can discard + re-upload.
+    await prisma.uploadBatch
+      .update({
+        where: { id: batchId },
+        data: { status: "failed", notes: msg.slice(0, 1000) },
+      })
+      .catch(() => {});
+    revalidatePath("/batches");
+    revalidatePath(`/batches/${batchId}`);
+    return { ok: false, error: msg };
+  }
 }
 
 export async function discardBatch(batchId: string): Promise<void> {
+  const idParse = batchIdSchema.safeParse(batchId);
+  if (!idParse.success) return;
+  batchId = idParse.data;
   const batch = await prisma.uploadBatch.findUnique({ where: { id: batchId } });
   if (!batch) return;
-  if (batch.status === "previewing") {
+  // 'previewing' and 'failed' batches can be discarded; 'committing' must
+  // never be discarded (a commit may still be in flight) and 'imported'
+  // batches require an explicit destructive purge, not a discard.
+  if (batch.status === "previewing" || batch.status === "failed") {
     await discardPreview(batchId);
     await prisma.uploadBatch.delete({ where: { id: batchId } });
+    log.info({ batchId, fromStatus: batch.status }, "discard_batch_ok");
+  } else {
+    log.warn({ batchId, status: batch.status }, "discard_batch_refused");
   }
   revalidatePath("/batches");
   redirect("/upload");

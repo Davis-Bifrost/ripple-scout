@@ -9,21 +9,19 @@ export type ClassifiedRow = NormalizedRow & {
 };
 
 /**
- * Classify rows against the current DB state.
+ * Pure classification: decide new/update/intra_batch_duplicate for each row
+ * given a map of channelId → existing Channel row id already in the DB.
+ *
+ * Kept free of DB access so the decision matrix is unit-testable. `classifyRows`
+ * is the thin DB-backed wrapper around it.
  * - "new"                    → not seen before
  * - "update"                 → channelId already exists in DB → will be merged
  * - "intra_batch_duplicate"  → appears more than once in this same CSV → only the first wins
  */
-export async function classifyRows(rows: NormalizedRow[]): Promise<ClassifiedRow[]> {
-  const ids = Array.from(new Set(rows.map((r) => r.channelId).filter(Boolean)));
-  const existing = ids.length
-    ? await prisma.channel.findMany({
-        where: { channelId: { in: ids } },
-        select: { id: true, channelId: true },
-      })
-    : [];
-  const existingById = new Map(existing.map((e) => [e.channelId, e.id]));
-
+export function classifyAgainst(
+  rows: NormalizedRow[],
+  existingById: Map<string, string>,
+): ClassifiedRow[] {
   const seenInBatch = new Set<string>();
   return rows.map((r) => {
     const existsInDb = existingById.has(r.channelId);
@@ -42,6 +40,21 @@ export async function classifyRows(rows: NormalizedRow[]): Promise<ClassifiedRow
     }
     return { ...r, classification: "new" as const };
   });
+}
+
+/**
+ * Classify rows against the current DB state.
+ */
+export async function classifyRows(rows: NormalizedRow[]): Promise<ClassifiedRow[]> {
+  const ids = Array.from(new Set(rows.map((r) => r.channelId).filter(Boolean)));
+  const existing = ids.length
+    ? await prisma.channel.findMany({
+        where: { channelId: { in: ids } },
+        select: { id: true, channelId: true },
+      })
+    : [];
+  const existingById = new Map(existing.map((e) => [e.channelId, e.id]));
+  return classifyAgainst(rows, existingById);
 }
 
 export function summarizeClassification(rows: ClassifiedRow[]) {
