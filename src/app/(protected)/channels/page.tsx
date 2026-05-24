@@ -51,18 +51,18 @@ export default async function ChannelsPage({
       },
     }),
     prisma.$queryRaw<{ countryCode: string }[]>`
-      SELECT DISTINCT countryCode FROM Channel
-      WHERE countryCode IS NOT NULL ORDER BY countryCode
+      SELECT DISTINCT "countryCode" FROM "Channel"
+      WHERE "countryCode" IS NOT NULL ORDER BY "countryCode"
     `,
     prisma.$queryRaw<{ searchKeyword: string }[]>`
-      SELECT DISTINCT searchKeyword FROM Channel
-      WHERE searchKeyword IS NOT NULL AND searchKeyword <> ''
-      ORDER BY searchKeyword
+      SELECT DISTINCT "searchKeyword" FROM "Channel"
+      WHERE "searchKeyword" IS NOT NULL AND "searchKeyword" <> ''
+      ORDER BY "searchKeyword"
       LIMIT 200
     `,
     prisma.$queryRaw<{ operator: string }[]>`
-      SELECT DISTINCT operator FROM UploadBatch
-      WHERE operator IS NOT NULL ORDER BY operator
+      SELECT DISTINCT "operator" FROM "UploadBatch"
+      WHERE "operator" IS NOT NULL ORDER BY "operator"
     `,
   ]);
 

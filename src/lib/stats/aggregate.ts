@@ -102,9 +102,9 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       _count: { _all: true },
     }),
     prisma.$queryRaw<{ day: string; count: number }[]>`
-      SELECT strftime('%Y-%m-%d', datetime(crawledAt / 1000, 'unixepoch')) AS day, COUNT(*) AS count
-      FROM ChannelObservation
-      WHERE crawledAt IS NOT NULL
+      SELECT to_char("crawledAt", 'YYYY-MM-DD') AS day, COUNT(*) AS count
+      FROM "ChannelObservation"
+      WHERE "crawledAt" IS NOT NULL
       GROUP BY day
       ORDER BY day ASC
       LIMIT 90
@@ -144,29 +144,27 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     prisma.$queryRaw<
       { keyword: string; channelCount: number; withEmail: number; avgSubscribers: number }[]
     >`
-      SELECT searchKeyword AS keyword,
-             COUNT(*) AS channelCount,
-             SUM(CASE WHEN hasEmail = 1 THEN 1 ELSE 0 END) AS withEmail,
-             COALESCE(AVG(subscriberCount), 0) AS avgSubscribers
-      FROM Channel
-      WHERE searchKeyword IS NOT NULL AND searchKeyword <> ''
-      GROUP BY searchKeyword
-      ORDER BY channelCount DESC
+      SELECT "searchKeyword" AS keyword,
+             COUNT(*) AS "channelCount",
+             SUM(CASE WHEN "hasEmail" = true THEN 1 ELSE 0 END) AS "withEmail",
+             COALESCE(AVG("subscriberCount"), 0) AS "avgSubscribers"
+      FROM "Channel"
+      WHERE "searchKeyword" IS NOT NULL AND "searchKeyword" <> ''
+      GROUP BY "searchKeyword"
+      ORDER BY "channelCount" DESC
       LIMIT 50
     `,
     prisma.$queryRaw<{ country: string; tier: string; count: number }[]>`
-      SELECT countryCode AS country, tierDerived AS tier, COUNT(*) AS count
-      FROM Channel
-      WHERE countryCode IS NOT NULL AND tierDerived IS NOT NULL
-      GROUP BY countryCode, tierDerived
+      SELECT "countryCode" AS country, "tierDerived" AS tier, COUNT(*) AS count
+      FROM "Channel"
+      WHERE "countryCode" IS NOT NULL AND "tierDerived" IS NOT NULL
+      GROUP BY "countryCode", "tierDerived"
       ORDER BY count DESC
     `,
     prisma.$queryRaw<{ median: number | null }[]>`
-      SELECT subscriberCount AS median
-      FROM Channel
-      WHERE subscriberCount IS NOT NULL
-      ORDER BY subscriberCount
-      LIMIT 1 OFFSET (SELECT COUNT(*) / 2 FROM Channel WHERE subscriberCount IS NOT NULL)
+      SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY "subscriberCount") AS median
+      FROM "Channel"
+      WHERE "subscriberCount" IS NOT NULL
     `,
     prisma.$queryRaw<
       {
@@ -183,54 +181,54 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     >`
       WITH batch_counts AS (
         SELECT
-          operator,
-          SUM(CASE WHEN status = 'imported' THEN 1 ELSE 0 END) AS batches,
-          SUM(CASE WHEN status = 'previewing' THEN 1 ELSE 0 END) AS previewBatches,
-          MAX(uploadedAt) AS lastUploadAt
-        FROM UploadBatch
-        WHERE operator IS NOT NULL
-        GROUP BY operator
+          "operator",
+          SUM(CASE WHEN "status" = 'imported' THEN 1 ELSE 0 END) AS batches,
+          SUM(CASE WHEN "status" = 'previewing' THEN 1 ELSE 0 END) AS "previewBatches",
+          EXTRACT(EPOCH FROM MAX("uploadedAt")) * 1000 AS "lastUploadAt"
+        FROM "UploadBatch"
+        WHERE "operator" IS NOT NULL
+        GROUP BY "operator"
       ),
       obs_counts AS (
-        SELECT ub.operator AS operator, COUNT(co.id) AS observations
-        FROM UploadBatch ub
-        JOIN ChannelObservation co ON co.batchId = ub.id
-        WHERE ub.operator IS NOT NULL AND ub.status = 'imported'
-        GROUP BY ub.operator
+        SELECT ub."operator" AS "operator", COUNT(co."id") AS observations
+        FROM "UploadBatch" ub
+        JOIN "ChannelObservation" co ON co."batchId" = ub."id"
+        WHERE ub."operator" IS NOT NULL AND ub."status" = 'imported'
+        GROUP BY ub."operator"
       ),
       operator_channels AS (
         SELECT DISTINCT
-          ub.operator AS operator,
-          co.channelRowId AS channelRowId
-        FROM UploadBatch ub
-        JOIN ChannelObservation co ON co.batchId = ub.id
-        WHERE ub.operator IS NOT NULL AND ub.status = 'imported'
+          ub."operator" AS "operator",
+          co."channelRowId" AS "channelRowId"
+        FROM "UploadBatch" ub
+        JOIN "ChannelObservation" co ON co."batchId" = ub."id"
+        WHERE ub."operator" IS NOT NULL AND ub."status" = 'imported'
       ),
       channel_stats AS (
         SELECT
-          oc.operator AS operator,
-          COUNT(*) AS uniqueChannels,
-          SUM(CASE WHEN c.hasEmail = 1 THEN 1 ELSE 0 END) AS withEmail,
-          COALESCE(AVG(c.subscriberCount), 0) AS avgSubscribers,
-          SUM(CASE WHEN c.countryCode = 'MY' THEN 1 ELSE 0 END) AS malaysiaCount
+          oc."operator" AS "operator",
+          COUNT(*) AS "uniqueChannels",
+          SUM(CASE WHEN c."hasEmail" = true THEN 1 ELSE 0 END) AS "withEmail",
+          COALESCE(AVG(c."subscriberCount"), 0) AS "avgSubscribers",
+          SUM(CASE WHEN c."countryCode" = 'MY' THEN 1 ELSE 0 END) AS "malaysiaCount"
         FROM operator_channels oc
-        JOIN Channel c ON c.id = oc.channelRowId
-        GROUP BY oc.operator
+        JOIN "Channel" c ON c."id" = oc."channelRowId"
+        GROUP BY oc."operator"
       )
       SELECT
-        bc.operator AS operator,
+        bc."operator" AS operator,
         COALESCE(bc.batches, 0) AS batches,
-        COALESCE(bc.previewBatches, 0) AS previewBatches,
+        COALESCE(bc."previewBatches", 0) AS "previewBatches",
         COALESCE(oc.observations, 0) AS observations,
-        COALESCE(cs.uniqueChannels, 0) AS uniqueChannels,
-        COALESCE(cs.withEmail, 0) AS withEmail,
-        COALESCE(cs.avgSubscribers, 0) AS avgSubscribers,
-        COALESCE(cs.malaysiaCount, 0) AS malaysiaCount,
-        bc.lastUploadAt AS lastUploadAt
+        COALESCE(cs."uniqueChannels", 0) AS "uniqueChannels",
+        COALESCE(cs."withEmail", 0) AS "withEmail",
+        COALESCE(cs."avgSubscribers", 0) AS "avgSubscribers",
+        COALESCE(cs."malaysiaCount", 0) AS "malaysiaCount",
+        bc."lastUploadAt" AS "lastUploadAt"
       FROM batch_counts bc
-      LEFT JOIN obs_counts oc ON oc.operator = bc.operator
-      LEFT JOIN channel_stats cs ON cs.operator = bc.operator
-      ORDER BY uniqueChannels DESC, bc.operator
+      LEFT JOIN obs_counts oc ON oc."operator" = bc."operator"
+      LEFT JOIN channel_stats cs ON cs."operator" = bc."operator"
+      ORDER BY "uniqueChannels" DESC, bc."operator"
     `,
     prisma.$queryRaw<
       {
@@ -242,16 +240,16 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       }[]
     >`
       SELECT
-        strftime('%Y-%m-%d', datetime(ub.uploadedAt / 1000, 'unixepoch')) AS day,
-        ub.operator AS operator,
-        COUNT(co.id) AS observations,
-        COUNT(DISTINCT co.channelRowId) AS uniqueChannels,
-        COUNT(DISTINCT CASE WHEN c.hasEmail = 1 THEN co.channelRowId END) AS withEmail
-      FROM UploadBatch ub
-      JOIN ChannelObservation co ON co.batchId = ub.id
-      JOIN Channel c ON c.id = co.channelRowId
-      WHERE ub.operator IS NOT NULL AND ub.status = 'imported'
-      GROUP BY day, ub.operator
+        to_char(ub."uploadedAt", 'YYYY-MM-DD') AS day,
+        ub."operator" AS operator,
+        COUNT(co."id") AS observations,
+        COUNT(DISTINCT co."channelRowId") AS "uniqueChannels",
+        COUNT(DISTINCT CASE WHEN c."hasEmail" = true THEN co."channelRowId" END) AS "withEmail"
+      FROM "UploadBatch" ub
+      JOIN "ChannelObservation" co ON co."batchId" = ub."id"
+      JOIN "Channel" c ON c."id" = co."channelRowId"
+      WHERE ub."operator" IS NOT NULL AND ub."status" = 'imported'
+      GROUP BY day, ub."operator"
       ORDER BY day DESC, observations DESC
     `,
   ]);

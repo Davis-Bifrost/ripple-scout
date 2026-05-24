@@ -29,12 +29,7 @@ async function main() {
   await prisma.channel.deleteMany();
   await prisma.uploadBatch.deleteMany();
 
-  // Reclaim space + reset rowids on SQLite
-  try {
-    await prisma.$executeRawUnsafe("VACUUM");
-  } catch (e) {
-    console.warn("VACUUM skipped:", (e as Error).message);
-  }
+  // (Postgres autovacuums; no manual VACUUM needed.)
 
   const uploadDir = path.join(process.cwd(), "uploads");
   let removed = 0;
