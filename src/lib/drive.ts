@@ -1,8 +1,16 @@
-import { google } from "googleapis";
+import { google, type drive_v3 } from "googleapis";
 import fs from "node:fs";
 import path from "node:path";
 
-function getDriveClient() {
+// Cache the client (and the parsed service-account key it reads from disk)
+// across calls. GoogleAuth refreshes access tokens internally, so a single
+// client is safe to reuse — and it avoids re-reading + re-parsing the key file
+// on every list/download during a sync.
+let cachedDrive: drive_v3.Drive | null = null;
+
+function getDriveClient(): drive_v3.Drive {
+  if (cachedDrive) return cachedDrive;
+
   const keyPath = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH;
   if (!keyPath) throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY_PATH is not set");
 
@@ -14,7 +22,8 @@ function getDriveClient() {
     scopes: ["https://www.googleapis.com/auth/drive.readonly"],
   });
 
-  return google.drive({ version: "v3", auth });
+  cachedDrive = google.drive({ version: "v3", auth });
+  return cachedDrive;
 }
 
 export type DriveFile = {
