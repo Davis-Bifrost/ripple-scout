@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { parseCsvText } from "@/lib/csv/parse";
 import { classifyRows, summarizeClassification } from "@/lib/csv/dedup";
+import { commitClassifiedRows } from "@/lib/csv/commit";
 import { savePreview, loadPreview, discardPreview } from "@/lib/csv/storage";
 import { extractOperator } from "@/lib/csv/operator";
 import { revalidatePath } from "next/cache";
@@ -195,108 +196,19 @@ export async function commitBatch(batchId: string): Promise<{ ok: boolean; error
       });
     }
 
-    // Pre-classify against current DB state (snapshot inside the commit run too)
+    // Re-classify against current DB state. This re-runs at commit time (not
+    // just at preview) to catch races between preview and commit.
     const classified = await classifyRows(preview.rows);
 
-    // Stats
-    let imported = 0;
-    let updated = 0;
-    let skipped = 0;
-
-    const CHUNK = 100;
-    const TX_TIMEOUT_MS = 30_000;
+    // Set-based commit: one createMany + one bulk UPDATE + one observation
+    // createMany per chunk, instead of a round-trip per row. See
+    // `commitClassifiedRows`.
     const now = new Date();
-
-    for (let i = 0; i < classified.length; i += CHUNK) {
-      const chunk = classified.slice(i, i + CHUNK);
-      await prisma.$transaction(
-        async (tx) => {
-          for (const row of chunk) {
-            if (row.classification === "intra_batch_duplicate") {
-              skipped++;
-              continue;
-            }
-
-            const channelData = {
-              channelName: row.channelName,
-              handle: row.handle,
-              channelUrl: row.channelUrl,
-              subscriberCount: row.subscriberCount,
-              videoCount: row.videoCount,
-              viewCount: row.viewCount,
-              engagementRate: row.engagementRate,
-              tierRaw: row.tierRaw,
-              tierDerived: row.tierDerived,
-              countryCode: row.countryCode,
-              joinedDate: row.joinedDate,
-              email: row.email,
-              emailSource: row.emailSource,
-              hasEmail: row.hasEmail,
-              contactStatus: row.contactStatus,
-              whatsapp: row.whatsapp,
-              phone: row.phone,
-              facebook: row.facebook,
-              instagram: row.instagram,
-              tiktok: row.tiktok,
-              twitter: row.twitter,
-              linktree: row.linktree,
-              channelLinks: row.channelLinks,
-              contactSummary: row.contactSummary,
-              searchKeyword: row.searchKeyword,
-              targetCountry: row.targetCountry,
-              crawledAt: row.crawledAt,
-              lastSeenAt: now,
-              lastBatchId: batchId,
-            };
-
-            const observationData = {
-              batchId,
-              searchKeyword: row.searchKeyword,
-              targetCountry: row.targetCountry,
-              crawledAt: row.crawledAt,
-              subscriberCount: row.subscriberCount,
-              viewCount: row.viewCount,
-              engagementRate: row.engagementRate,
-            };
-
-            if (row.classification === "new") {
-              await tx.channel.create({
-                data: {
-                  channelId: row.channelId,
-                  ...channelData,
-                  description: row.description,
-                  keywords: row.keywords,
-                  categories: row.categories,
-                  firstSeenAt: now,
-                  firstBatchId: batchId,
-                  observationCount: 1,
-                  observations: { create: observationData },
-                },
-              });
-              imported++;
-            } else {
-              await tx.channel.update({
-                where: { channelId: row.channelId },
-                data: {
-                  ...channelData,
-                  ...(row.description !== null
-                    ? { description: row.description }
-                    : {}),
-                  ...(row.keywords !== null ? { keywords: row.keywords } : {}),
-                  ...(row.categories !== null
-                    ? { categories: row.categories }
-                    : {}),
-                  observationCount: { increment: 1 },
-                  observations: { create: observationData },
-                },
-              });
-              updated++;
-            }
-          }
-        },
-        { timeout: TX_TIMEOUT_MS, maxWait: 10_000 },
-      );
-    }
+    const { imported, updated, skipped } = await commitClassifiedRows(
+      classified,
+      batchId,
+      now,
+    );
 
     await prisma.uploadBatch.update({
       where: { id: batchId },
