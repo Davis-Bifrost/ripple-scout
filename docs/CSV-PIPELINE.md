@@ -8,7 +8,8 @@ parseCsvText(text)            lib/csv/parse.ts      — PapaParse, headerless, g
   → mapRow(cells)             lib/csv/columns.ts    — positional → RawRow; rejects ≠ {27,28} cols
   → normalize(raw)            lib/csv/normalize.ts  — clean/parse/derive → NormalizedRow | reject
 classifyRows(rows)            lib/csv/dedup.ts      — new | update | intra_batch_duplicate
-commitBatch(batchId)          app/actions/upload.ts — transactional upsert
+commitBatch(batchId)          app/actions/upload.ts — orchestration (claim, status, revalidate)
+  → commitClassifiedRows      lib/csv/commit.ts     — set-based write, one transaction
 ```
 
 ## Column map (`columns.ts`)
@@ -111,9 +112,9 @@ copies → `intra_batch_duplicate`). `classifyRows` is the DB-backed wrapper tha
 2. Load the staged preview JSON (`uploads/<batchId>.json`). Missing → fail the batch.
 3. Persist parse-time `ImportError` rows.
 4. **Re-classify** against current DB state (catches preview↔commit races).
-5. Upsert in **100-row transactions** (30s timeout): `new` → `channel.create` with nested observation; `update` → `channel.update` (non-null-only merge of description/keywords/categories) with nested observation + `observationCount: {increment: 1}`. `intra_batch_duplicate` → skip.
+5. **Set-based write** via `commitClassifiedRows` (`src/lib/csv/commit.ts`), all in **one transaction**: `new` → `createMany`; `update` → one bulk `UPDATE "Channel" … FROM (VALUES …)` (COALESCE merge of description/keywords/categories, `observationCount + 1`); then a single `createMany` for every observation. `intra_batch_duplicate` → skipped. Rows are chunked (500) to bound per-statement bind-params, but all chunks share the one transaction — they are not separate commits.
 6. Set status `imported`, write counters, discard preview, revalidate paths.
-7. On any error: set status `failed`, store message in `notes`, return the error.
+7. On any error the whole transaction rolls back (no partial channels/observations persist): set status `failed`, store message in `notes`, return the error.
 
 **Merge policy:** on `update`, scalar fields are overwritten with the new values; but
 `description`/`keywords`/`categories` are only overwritten when the new value is non-null
@@ -122,6 +123,11 @@ copies → `intra_batch_duplicate`). `classifyRows` is the DB-backed wrapper tha
 ## Testing
 
 `src/lib/csv/*.test.ts` cover `columns.mapRow`, all `normalize` rules, and the
-`classifyAgainst` matrix. Run `pnpm test:run`. The DB-backed `commitBatch` idempotency is
-covered by `scripts/verify-commit-idempotency.ts` (promote to a Vitest integration test
-once on Postgres, where a throwaway test DB is cheap).
+`classifyAgainst` matrix — pure logic, no DB. Run `pnpm test:run`.
+
+DB-backed behavior now has a real integration suite (`pnpm test:integration`,
+`vitest.integration.config.ts`): `commit.integration.test.ts` exercises
+`commitClassifiedRows` against the local Postgres — new/update, COALESCE merge,
+`observationCount` increment, intra-batch-duplicate skip, and whole-batch rollback —
+using synthetic prefixed ids that clean up after themselves. `scripts/verify-commit-idempotency.ts`
+still proves the `previewing→committing` claim is atomic under concurrent callers.

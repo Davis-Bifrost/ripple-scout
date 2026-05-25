@@ -32,6 +32,7 @@ See `docs/CSV-PIPELINE.md` for the column map and every normalization rule.
 ## Load-bearing invariants (don't break these)
 
 - **`commitBatch` is idempotent** via an atomic `previewing → committing` claim (`updateMany` where status=previewing). A duplicate call finds count=0 and aborts. Status ends at `imported` or `failed`. See `src/app/actions/upload.ts`.
+- **The commit is set-based and atomic.** Writes go through `commitClassifiedRows` (`src/lib/csv/commit.ts`): `createMany` for new channels, one bulk `UPDATE … FROM (VALUES …)` for existing ones (COALESCE on description/keywords/categories, `observationCount + 1`), and a `createMany` for observations — not a round-trip per row. The whole batch runs in **one transaction**, so any failure rolls back everything; a `failed` batch never leaves partial channels/observations behind.
 - **Status lifecycle:** `previewing → committing → (imported | failed)`. Enforced by code; the column is still a plain string (converting to a Postgres enum is an open follow-up). Only `previewing`/`failed` batches may be discarded.
 - **Classification re-runs at commit time** (not just at preview) to catch races between preview and commit.
 - **`Channel.observationCount` is a hand-maintained counter.** Reconcile with `scripts/reconcile-observation-count.ts` if dashboard numbers look off.
@@ -49,9 +50,16 @@ pnpm db:migrate           # first-time: create schema (prisma migrate dev)
 pnpm dev                  # Next dev server on :3000
 pnpm db:studio            # Prisma Studio
 pnpm typecheck            # tsc --noEmit
-pnpm test                 # vitest (watch)
-pnpm test:run             # vitest run (CI mode)
+pnpm test                 # vitest (watch) — pure-logic suite, DB-free
+pnpm test:run             # vitest run (CI mode) — pure-logic suite
+pnpm test:integration     # vitest run against the real local Postgres
 ```
+
+Two test suites: the default (`test`/`test:run`) is pure-logic and never connects
+to a DB (a fake `DATABASE_URL` is injected). `test:integration` (`*.integration.test.ts`,
+`vitest.integration.config.ts`) hits the real local Postgres — tests there use
+uniquely-prefixed synthetic ids and clean up after themselves, so they never wipe
+real data.
 
 If the app can't reach the DB, check `docker compose ps` — the container must be
 healthy. Stop it with `docker compose down` (data persists in the `ripple-pgdata` volume).
