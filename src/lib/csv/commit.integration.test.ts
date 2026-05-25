@@ -214,6 +214,28 @@ describe("commitClassifiedRows", () => {
     expect(existing?.observationCount).toBe(2);
   });
 
+  it("rolls back the whole batch if any chunk fails (atomic commit)", async () => {
+    // Pre-seed a channel so a later "new" row collides on the unique channelId.
+    await commitClassifiedRows([row("new", ch("preexist"))], batchA, new Date());
+
+    // chunkSize 1 → "atomicValid" lands in chunk 1, then "preexist" (classified
+    // new but already in the DB) violates the unique constraint in chunk 2.
+    await expect(
+      commitClassifiedRows(
+        [row("new", ch("atomicValid")), row("new", ch("preexist"))],
+        batchB,
+        new Date(),
+        { chunkSize: 1 },
+      ),
+    ).rejects.toThrow();
+
+    // The whole commit must roll back — the first chunk's row must not persist.
+    const v = await prisma.channel.findUnique({
+      where: { channelId: ch("atomicValid") },
+    });
+    expect(v).toBeNull();
+  });
+
   it("is a no-op for an empty row set", async () => {
     const res = await commitClassifiedRows([], batchA, new Date());
     expect(res).toEqual({ imported: 0, updated: 0, skipped: 0 });

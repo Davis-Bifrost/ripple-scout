@@ -10,9 +10,13 @@ export type CommitCounts = {
 
 // Bounds the per-statement parameter count (Postgres caps bind params at 65535).
 // At ~33 columns per update row that is ~2k rows; 500 keeps us comfortably under
-// and bounds transaction size.
+// and bounds each statement. The chunks share ONE transaction (see below), so
+// this is a statement-size bound, not a commit boundary.
 const CHUNK = 500;
-const TX_TIMEOUT_MS = 30_000;
+// One transaction wraps the whole batch, so the timeout must cover every chunk.
+// Set-based writes are fast (a few thousand rows commit in well under a second),
+// but give large batches generous headroom.
+const TX_TIMEOUT_MS = 120_000;
 const TX_MAX_WAIT_MS = 10_000;
 
 // Fields that are only overwritten when the incoming value is non-null, so a
@@ -34,28 +38,35 @@ const COALESCE_FIELDS = new Set(["description", "keywords", "categories"]);
  * upstream in `classifyRows`). Counts are derived from classification, matching
  * the previous behavior. Idempotency is still guaranteed by the
  * previewing→committing claim in `commitBatch`, not here.
+ *
+ * The entire batch commits in ONE transaction: if any chunk fails, the whole
+ * import rolls back, so a `failed` batch never leaves partial channels,
+ * observations, or `observationCount` drift behind.
  */
 export async function commitClassifiedRows(
   rows: ClassifiedRow[],
   batchId: string,
   now: Date,
+  options: { chunkSize?: number } = {},
 ): Promise<CommitCounts> {
-  let imported = 0;
-  let updated = 0;
-  let skipped = 0;
+  const chunkSize = options.chunkSize ?? CHUNK;
 
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const chunk = rows.slice(i, i + CHUNK);
-    const news = chunk.filter((r) => r.classification === "new");
-    const updates = chunk.filter((r) => r.classification === "update");
-    skipped += chunk.filter(
-      (r) => r.classification === "intra_batch_duplicate",
-    ).length;
+  return prisma.$transaction(
+    async (tx) => {
+      let imported = 0;
+      let updated = 0;
+      let skipped = 0;
 
-    if (news.length === 0 && updates.length === 0) continue;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        const chunk = rows.slice(i, i + chunkSize);
+        const news = chunk.filter((r) => r.classification === "new");
+        const updates = chunk.filter((r) => r.classification === "update");
+        skipped += chunk.filter(
+          (r) => r.classification === "intra_batch_duplicate",
+        ).length;
 
-    await prisma.$transaction(
-      async (tx) => {
+        if (news.length === 0 && updates.length === 0) continue;
+
         if (news.length) {
           await tx.channel.createMany({
             data: news.map((r) => newChannelData(r, batchId, now)),
@@ -101,12 +112,12 @@ export async function commitClassifiedRows(
 
         imported += news.length;
         updated += updates.length;
-      },
-      { timeout: TX_TIMEOUT_MS, maxWait: TX_MAX_WAIT_MS },
-    );
-  }
+      }
 
-  return { imported, updated, skipped };
+      return { imported, updated, skipped };
+    },
+    { timeout: TX_TIMEOUT_MS, maxWait: TX_MAX_WAIT_MS },
+  );
 }
 
 function newChannelData(r: ClassifiedRow, batchId: string, now: Date) {
