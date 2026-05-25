@@ -113,6 +113,7 @@ function Td({ children, className = "" }: { children: React.ReactNode; className
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     previewing: "bg-amber-100 text-amber-700",
+    committing: "bg-blue-100 text-blue-700",
     imported: "bg-emerald-100 text-emerald-700",
     failed: "bg-red-100 text-red-700",
     pending: "bg-zinc-100 text-zinc-700",

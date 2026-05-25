@@ -6,6 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio"
@@ -14,10 +18,12 @@
     "@prisma/client": "^5.22.0",
     "@tanstack/react-table": "^8.20.5",
     "clsx": "^2.1.1",
+    "googleapis": "^171.4.0",
     "iron-session": "^8.0.4",
     "lucide-react": "^0.460.0",
     "next": "^15.1.0",
     "papaparse": "^5.4.1",
+    "pino": "^10.3.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^2.15.0",
@@ -34,6 +40,7 @@
     "prisma": "^5.22.0",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.22.3",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.7"
   }
 }

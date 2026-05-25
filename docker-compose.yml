@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ripple-scout-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ripple
+      POSTGRES_PASSWORD: ripple
+      POSTGRES_DB: ripple_scout
+    ports:
+      - "5432:5432"
+    volumes:
+      - ripple-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ripple -d ripple_scout"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ripple-pgdata:

@@ -4,17 +4,28 @@ import { prisma } from "@/lib/db";
 import {
   buildOrderBy,
   buildWhere,
+  channelFiltersSchema,
+  channelSortSchema,
   type ChannelFilters,
   type ChannelSort,
 } from "@/lib/channels-query";
 import Papa from "papaparse";
+import { actionLogger } from "@/lib/logger";
+
+const log = actionLogger("channels");
 
 export async function exportChannelsCsv(
   filters: ChannelFilters,
   sort: ChannelSort,
 ): Promise<string> {
-  const where = buildWhere(filters);
-  const orderBy = buildOrderBy(sort);
+  const t0 = Date.now();
+  // Defensive re-validation: a server action can be invoked directly by any
+  // authenticated client with arbitrary input; Next.js validates the call
+  // signature but not the contents.
+  const safeFilters = channelFiltersSchema.parse(filters);
+  const safeSort = channelSortSchema.parse(sort);
+  const where = buildWhere(safeFilters);
+  const orderBy = buildOrderBy(safeSort);
   const rows = await prisma.channel.findMany({
     where,
     orderBy,
@@ -23,6 +34,10 @@ export async function exportChannelsCsv(
       lastBatch: { select: { operator: true } },
     },
   });
+  log.info(
+    { rowCount: rows.length, sort: safeSort, durationMs: Date.now() - t0 },
+    "export_csv",
+  );
 
   const data = rows.map((r, i) => ({
     "#": i + 1,

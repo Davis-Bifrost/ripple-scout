@@ -1,4 +1,16 @@
 import type { Prisma } from "@prisma/client";
+import { z } from "zod";
+
+const HAS_EMAIL_VALUES = ["true", "false"] as const;
+const SORT_VALUES = [
+  "subs_desc",
+  "subs_asc",
+  "views_desc",
+  "views_asc",
+  "engagement_desc",
+  "joined_desc",
+  "lastSeen_desc",
+] as const;
 
 export type ChannelFilters = {
   q?: string;
@@ -8,46 +20,61 @@ export type ChannelFilters = {
   searchKeyword?: string;
   batchId?: string;
   operator?: string;
-  hasEmail?: "true" | "false";
+  hasEmail?: (typeof HAS_EMAIL_VALUES)[number];
 };
+export type ChannelSort = (typeof SORT_VALUES)[number];
 
-export type ChannelSort =
-  | "subs_desc"
-  | "subs_asc"
-  | "views_desc"
-  | "views_asc"
-  | "engagement_desc"
-  | "joined_desc"
-  | "lastSeen_desc";
+// Exported so server actions can defensively re-validate untrusted input.
+export const channelFiltersSchema = z.object({
+  q: z.string().min(1).max(200).optional(),
+  countries: z.array(z.string().min(2).max(8)).max(50).optional(),
+  tiers: z.array(z.string().min(1).max(20)).max(20).optional(),
+  contactStatus: z.string().min(1).max(50).optional(),
+  searchKeyword: z.string().min(1).max(200).optional(),
+  batchId: z.string().min(1).max(60).optional(),
+  operator: z.string().min(1).max(100).optional(),
+  hasEmail: z.enum(HAS_EMAIL_VALUES).optional(),
+});
 
-export function parseSearchParams(sp: Record<string, string | string[] | undefined>) {
+export const channelSortSchema = z.enum(SORT_VALUES).catch("subs_desc");
+
+const pageSchema = z.coerce.number().int().min(1).catch(1);
+const pageSizeSchema = z.coerce.number().int().min(10).max(200).catch(50);
+
+export function parseSearchParams(
+  sp: Record<string, string | string[] | undefined>,
+) {
   const get = (k: string): string | undefined => {
     const v = sp[k];
     if (Array.isArray(v)) return v[0];
     return v;
   };
-  const split = (v: string | undefined) =>
-    v
-      ? v
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : undefined;
-  const tiers = split(get("tier"));
-  const countries = split(get("country"));
-  const filters: ChannelFilters = {
+  const split = (v: string | undefined): string[] | undefined => {
+    if (!v) return undefined;
+    const arr = v
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return arr.length ? arr : undefined;
+  };
+
+  const raw = {
     q: get("q") || undefined,
-    countries: countries && countries.length ? countries : undefined,
-    tiers: tiers && tiers.length ? tiers : undefined,
+    countries: split(get("country")),
+    tiers: split(get("tier")),
     contactStatus: get("contactStatus") || undefined,
     searchKeyword: get("searchKeyword") || undefined,
     batchId: get("batchId") || undefined,
     operator: get("operator") || undefined,
-    hasEmail: (get("hasEmail") as ChannelFilters["hasEmail"]) || undefined,
+    hasEmail: get("hasEmail") || undefined,
   };
-  const sort = (get("sort") as ChannelSort) || "subs_desc";
-  const page = Math.max(1, Number(get("page") ?? 1));
-  const pageSize = Math.min(200, Math.max(10, Number(get("pageSize") ?? 50)));
+  // safeParse: malformed input collapses to no-filter rather than 500ing.
+  const parsed = channelFiltersSchema.safeParse(raw);
+  const filters: ChannelFilters = parsed.success ? parsed.data : {};
+
+  const sort = channelSortSchema.parse(get("sort") ?? "subs_desc");
+  const page = pageSchema.parse(get("page") ?? "1");
+  const pageSize = pageSizeSchema.parse(get("pageSize") ?? "50");
   return { filters, sort, page, pageSize };
 }
 

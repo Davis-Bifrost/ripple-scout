@@ -8,17 +8,19 @@ and exploring them via filters, charts, and exports.
 
 - Next.js 15 App Router (TypeScript)
 - Tailwind v4
-- Prisma + SQLite (single file under `data/ripple-scout.db`)
+- Prisma + PostgreSQL (local Docker, `postgres:16`)
 - iron-session single-password auth
 - papaparse for CSV in/out
 - recharts for charts
 - TanStack React Table for the channels table
+- Vitest (pure-logic suite + a real-Postgres integration suite)
 
 ## Running locally
 
 ```bash
 pnpm install
-pnpm db:migrate
+docker compose up -d   # start Postgres (postgres:16 on :5432)
+pnpm db:migrate        # first-time: create the schema
 pnpm dev
 ```
 
@@ -31,8 +33,11 @@ Copy `.env.example` to `.env` and set:
 ```env
 ADMIN_PASSWORD=your-shared-password
 SESSION_SECRET=please-set-to-a-random-32-byte-hex-string
-DATABASE_URL=file:./data/ripple-scout.db
+DATABASE_URL=postgresql://ripple:ripple@localhost:5432/ripple_scout?schema=public
 ```
+
+The `DATABASE_URL` above matches the credentials in `docker-compose.yml`. For
+Drive sync also set `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` and `GOOGLE_DRIVE_FOLDER_ID`.
 
 Generate a session secret:
 
@@ -48,10 +53,13 @@ openssl rand -hex 32
    staged on disk in `uploads/<batchId>.json`.
 3. **/batches/[id]/preview** — see what would be inserted vs updated, plus
    any parse errors. Click **Import** to commit.
-4. **Import** runs upserts in 200-row chunks within Prisma transactions. New
-   rows create a `Channel`; existing rows update non-empty fields and always
-   append a `ChannelObservation`. Per-row errors are isolated (logged to
-   `ImportError`, batch keeps going).
+4. **Import** (`commitBatch`) re-classifies against the current DB, then writes
+   the whole batch in **one transaction**: new channels via `createMany`,
+   existing ones via a single bulk `UPDATE` (non-empty merge of
+   description/keywords/categories), and a `ChannelObservation` per row. It is
+   **atomic** — if anything fails the whole batch rolls back and the batch is
+   marked `failed`. Rows that fail to parse are recorded as `ImportError` at
+   preview time and skipped.
 5. **/dashboard** — KPIs and charts across the whole DB.
 6. **/channels** — filterable / sortable / paginated table with CSV export.
 
@@ -66,7 +74,15 @@ imported.
 
 ## Resetting
 
+Wipe imported data but keep the schema:
+
 ```bash
-rm data/ripple-scout.db
-pnpm db:migrate
+pnpm exec tsx scripts/clean.ts
+```
+
+Or drop the database entirely (removes the `ripple-pgdata` volume):
+
+```bash
+docker compose down -v
+docker compose up -d && pnpm db:migrate
 ```

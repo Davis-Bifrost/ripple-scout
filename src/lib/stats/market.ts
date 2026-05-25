@@ -138,21 +138,21 @@ export async function getMarketStats(
         observations: number;
       }[]
     >`
-      SELECT ub.operator AS operator,
-             COUNT(DISTINCT c.id) AS uniqueChannels,
-             COUNT(DISTINCT CASE WHEN c.hasEmail = 1 THEN c.id END) AS withEmail,
-             COUNT(co.id) AS observations
-      FROM Channel c
-      JOIN ChannelObservation co ON co.channelRowId = c.id
-      JOIN UploadBatch ub ON ub.id = co.batchId
-      WHERE ub.operator IS NOT NULL AND ub.status = 'imported'
+      SELECT ub."operator" AS operator,
+             COUNT(DISTINCT c."id") AS "uniqueChannels",
+             COUNT(DISTINCT CASE WHEN c."hasEmail" = true THEN c."id" END) AS "withEmail",
+             COUNT(co."id") AS observations
+      FROM "Channel" c
+      JOIN "ChannelObservation" co ON co."channelRowId" = c."id"
+      JOIN "UploadBatch" ub ON ub."id" = co."batchId"
+      WHERE ub."operator" IS NOT NULL AND ub."status" = 'imported'
         AND ${scope === "based"
-          ? Prisma.sql`c.countryCode = ${code}`
+          ? Prisma.sql`c."countryCode" = ${code}`
           : scope === "targeting"
-            ? Prisma.sql`c.targetCountry = ${code}`
-            : Prisma.sql`(c.countryCode = ${code} OR c.targetCountry = ${code})`}
-      GROUP BY ub.operator
-      ORDER BY uniqueChannels DESC
+            ? Prisma.sql`c."targetCountry" = ${code}`
+            : Prisma.sql`(c."countryCode" = ${code} OR c."targetCountry" = ${code})`}
+      GROUP BY ub."operator"
+      ORDER BY "uniqueChannels" DESC
     `,
     prisma.$queryRaw<
       {
@@ -164,32 +164,32 @@ export async function getMarketStats(
       }[]
     >`
       SELECT
-        strftime('%Y-%m-%d', datetime(ub.uploadedAt / 1000, 'unixepoch')) AS day,
-        ub.operator AS operator,
-        COUNT(co.id) AS observations,
-        COUNT(DISTINCT co.channelRowId) AS uniqueChannels,
-        COUNT(DISTINCT CASE WHEN c.hasEmail = 1 THEN co.channelRowId END) AS withEmail
-      FROM UploadBatch ub
-      JOIN ChannelObservation co ON co.batchId = ub.id
-      JOIN Channel c ON c.id = co.channelRowId
-      WHERE ub.operator IS NOT NULL AND ub.status = 'imported'
+        to_char(ub."uploadedAt", 'YYYY-MM-DD') AS day,
+        ub."operator" AS operator,
+        COUNT(co."id") AS observations,
+        COUNT(DISTINCT co."channelRowId") AS "uniqueChannels",
+        COUNT(DISTINCT CASE WHEN c."hasEmail" = true THEN co."channelRowId" END) AS "withEmail"
+      FROM "UploadBatch" ub
+      JOIN "ChannelObservation" co ON co."batchId" = ub."id"
+      JOIN "Channel" c ON c."id" = co."channelRowId"
+      WHERE ub."operator" IS NOT NULL AND ub."status" = 'imported'
         AND ${scope === "based"
-          ? Prisma.sql`c.countryCode = ${code}`
+          ? Prisma.sql`c."countryCode" = ${code}`
           : scope === "targeting"
-            ? Prisma.sql`c.targetCountry = ${code}`
-            : Prisma.sql`(c.countryCode = ${code} OR c.targetCountry = ${code})`}
-      GROUP BY day, ub.operator
+            ? Prisma.sql`c."targetCountry" = ${code}`
+            : Prisma.sql`(c."countryCode" = ${code} OR c."targetCountry" = ${code})`}
+      GROUP BY day, ub."operator"
       ORDER BY day DESC, observations DESC
     `,
     prisma.$queryRaw<{ count: number }[]>`
-      SELECT COUNT(co.id) AS count
-      FROM ChannelObservation co
-      JOIN Channel c ON c.id = co.channelRowId
+      SELECT COUNT(co."id") AS count
+      FROM "ChannelObservation" co
+      JOIN "Channel" c ON c."id" = co."channelRowId"
       WHERE ${scope === "based"
-        ? Prisma.sql`c.countryCode = ${code}`
+        ? Prisma.sql`c."countryCode" = ${code}`
         : scope === "targeting"
-          ? Prisma.sql`c.targetCountry = ${code}`
-          : Prisma.sql`(c.countryCode = ${code} OR c.targetCountry = ${code})`}
+          ? Prisma.sql`c."targetCountry" = ${code}`
+          : Prisma.sql`(c."countryCode" = ${code} OR c."targetCountry" = ${code})`}
     `,
   ]);
 
@@ -264,10 +264,10 @@ export async function getMarketStats(
 export async function listKnownMarkets(): Promise<string[]> {
   const rows = await prisma.$queryRaw<{ code: string }[]>`
     SELECT DISTINCT code FROM (
-      SELECT countryCode AS code FROM Channel WHERE countryCode IS NOT NULL
+      SELECT "countryCode" AS code FROM "Channel" WHERE "countryCode" IS NOT NULL
       UNION
-      SELECT targetCountry AS code FROM Channel WHERE targetCountry IS NOT NULL
-    )
+      SELECT "targetCountry" AS code FROM "Channel" WHERE "targetCountry" IS NOT NULL
+    ) AS codes
     ORDER BY code
   `;
   return rows.map((r) => r.code);

@@ -4,6 +4,14 @@ node_modules
 .env.local
 data/*.db
 data/*.db-journal
+prisma/data/*.db
+prisma/data/*.db-journal
+prisma/data/export/
+*.bak-*
 uploads/
 *.log
 .DS_Store
+
+# Google service account credentials
+prisma/*-service-account*.json
+prisma/affiliate-ai-*.json

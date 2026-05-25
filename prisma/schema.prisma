@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -13,6 +13,7 @@ model UploadBatch {
   operator       String?
   fileSize       Int
   fileHash       String
+  driveFileId    String?
   uploadedAt     DateTime @default(now())
   status         String
   totalRows      Int      @default(0)
@@ -28,6 +29,7 @@ model UploadBatch {
   @@index([uploadedAt])
   @@index([fileHash])
   @@index([operator])
+  @@index([driveFileId])
 }
 
 model Channel {
@@ -82,7 +84,12 @@ model Channel {
 model ChannelObservation {
   id              String   @id @default(cuid())
   channelRowId    String
-  channel         Channel  @relation(fields: [channelRowId], references: [id], onDelete: Cascade)
+  // Restrict: a Channel must never be deleted while it still has time-series
+  // observations attached. Use a soft-delete or explicit transactional purge
+  // instead of relying on cascade. (Batch->Observation cascade is kept on
+  // purpose: discardBatch is the only legitimate delete path and is gated to
+  // 'previewing'/'failed' batches.)
+  channel         Channel  @relation(fields: [channelRowId], references: [id], onDelete: Restrict)
   batchId         String
   batch           UploadBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   searchKeyword   String?

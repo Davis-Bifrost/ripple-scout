@@ -53,6 +53,22 @@ export default async function BatchDetailPage({
         </div>
       )}
 
+      {batch.status === "committing" && (
+        <div className="border border-blue-300 bg-blue-50 rounded-lg p-3 text-sm">
+          Commit in progress. Reload this page in a moment to see the result.
+        </div>
+      )}
+
+      {batch.status === "failed" && (
+        <div className="border border-red-300 bg-red-50 rounded-lg p-3 text-sm space-y-1">
+          <div>
+            Commit failed{batch.notes ? `: ${batch.notes}` : "."} The batch may
+            contain partially imported observations; discard it and re-upload
+            the source file.
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Stat label="Total rows" value={formatNumber(batch.totalRows)} />
         <Stat label="Valid" value={formatNumber(batch.validRows)} />
