@@ -3,7 +3,7 @@
 import crypto from "node:crypto";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { parseCsvText } from "@/lib/csv/parse";
+import { parseCsvText, toWellFormedText } from "@/lib/csv/parse";
 import { classifyRows, summarizeClassification } from "@/lib/csv/dedup";
 import { commitClassifiedRows } from "@/lib/csv/commit";
 import { savePreview, loadPreview, discardPreview } from "@/lib/csv/storage";
@@ -187,11 +187,14 @@ export async function commitBatch(batchId: string): Promise<{ ok: boolean; error
     // Persist parse-time problems
     if (preview.problems.length) {
       await prisma.importError.createMany({
+        // Sanitize at the Prisma boundary too: previews persisted before the
+        // parse-time fix may still carry lone surrogates that break the
+        // query-engine JSON protocol. See toWellFormedText.
         data: preview.problems.map((p) => ({
           batchId,
           rowNumber: p.rowNumber,
-          reason: p.reason,
-          rawRow: p.rawRow,
+          reason: toWellFormedText(p.reason),
+          rawRow: toWellFormedText(p.rawRow),
         })),
       });
     }

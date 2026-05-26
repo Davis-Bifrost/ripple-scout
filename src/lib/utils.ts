@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { COUNTRY_NAMES } from "./countries";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -31,24 +32,17 @@ export function formatDateTime(d: Date | string | null | undefined): string {
   return date.toISOString().replace("T", " ").slice(0, 19);
 }
 
-let _regionNames: Intl.DisplayNames | null = null;
-function regionNames(): Intl.DisplayNames {
-  if (!_regionNames) _regionNames = new Intl.DisplayNames(["en"], { type: "region" });
-  return _regionNames;
-}
-
 /**
  * Convert an ISO-2 country code (e.g. "TW") to its English name ("Taiwan").
  * Returns the original code unchanged if it can't be resolved.
+ *
+ * Backed by a static map (COUNTRY_NAMES), not Intl.DisplayNames: the latter's
+ * CLDR data differs between Node and the browser, so SSR-ed country labels
+ * mismatched their client hydration (e.g. "Hong Kong SAR China" vs "Hong Kong").
  */
 export function formatCountry(code: string | null | undefined): string {
   if (!code) return "—";
   const up = code.toUpperCase();
   if (!/^[A-Z]{2}$/.test(up)) return code;
-  try {
-    const name = regionNames().of(up);
-    return name && name !== up ? name : up;
-  } catch {
-    return up;
-  }
+  return COUNTRY_NAMES[up] ?? up;
 }
