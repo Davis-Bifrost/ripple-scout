@@ -8,6 +8,18 @@ export type ParseProblem = {
   rawRow: string;
 };
 
+/**
+ * Replace unpaired UTF-16 surrogates with U+FFFD. CSV cells full of emoji
+ * (channel names/bios) yield astral characters; truncating mid-pair — or
+ * decoding garbled upstream bytes — leaves a lone surrogate. Prisma's
+ * query-engine JSON protocol can't encode those and dies with "unexpected end
+ * of hex escape", failing the whole importError.createMany(). Callers must run
+ * this on any free-text captured from a CSV before it reaches Prisma.
+ */
+export function toWellFormedText(s: string): string {
+  return s.replace(/\p{Surrogate}/gu, "�");
+}
+
 export type ParsedFile = {
   totalRows: number;
   validRows: NormalizedRow[];
@@ -49,7 +61,11 @@ export function parseCsvText(text: string): ParsedFile {
     total++;
 
     const rowNumber = i + 1;
-    const rawJoined = cells.map((c) => (c ?? "").toString()).join(",").slice(0, 500);
+    // Slice first (cap stored size), then sanitize so a pair cut at the
+    // boundary can't survive as a lone surrogate.
+    const rawJoined = toWellFormedText(
+      cells.map((c) => (c ?? "").toString()).join(",").slice(0, 500),
+    );
 
     const mapped = mapRow(cells);
     if (!mapped.ok) {
